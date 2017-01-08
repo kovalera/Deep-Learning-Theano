@@ -6,11 +6,12 @@ import os
 import sys
 import timeit
 
-import numpy
+import numpy as np
 import theano
 import theano.tensor as T
 from logistic_sgd import LogisticRegression, load_data
 
+import matplotlib.pyplot as plt
 
 class HiddenLayer(object):
     def __init__(self, rng, input, n_in, n_out, W=None, b=None,
@@ -31,10 +32,10 @@ class HiddenLayer(object):
         #        should use 4 times larger initial weights for sigmoid
         #        compared to tanh
         if W is None:
-            W_values = numpy.asarray(
+            W_values = np.asarray(
                 rng.uniform(
-                    low=-numpy.sqrt(6. / (n_in + n_out)),
-                    high=numpy.sqrt(6. / (n_in + n_out)),
+                    low=-np.sqrt(6. / (n_in + n_out)),
+                    high=np.sqrt(6. / (n_in + n_out)),
                     size=(n_in, n_out)
                 ),
                 dtype=theano.config.floatX
@@ -45,7 +46,7 @@ class HiddenLayer(object):
             W = theano.shared(value=W_values, name='W', borrow=True)
 
         if b is None:
-            b_values = numpy.zeros((n_out,), dtype=theano.config.floatX)
+            b_values = np.zeros((n_out,), dtype=theano.config.floatX)
             b = theano.shared(value=b_values, name='b', borrow=True)
 
         self.W = W
@@ -149,7 +150,7 @@ class MLP(object):
         # same holds for the function computing the number of errors
         self.errors = self.logRegressionLayer.errors
 
-        # the parameters of the model are the parameters of the two layer it is
+        # the parameters of the model are the parameters of the layers it is
         # made out of
         self.params = hL_Params
         # end-snippet-3
@@ -157,27 +158,28 @@ class MLP(object):
         # keep track of model input
         self.input = input
 class mlp_model(object):
-    ######################
-    # BUILD ACTUAL MODEL #
-    ######################
-    def __init__ (self,datasets,learning_rate = 0.01, L1_reg = 0.00, L2_reg = 0.0001,n_in=28*28, n_hidden = [100, 20, 20, 20, 20],n_out=10,batch_size=20):
+    def __init__ (self,datasets,learning_rate = 0.01, L1_reg = 0.00, L2_reg = 0.0001,n_in=28*28, n_hidden = [100, 20, 20, 20, 20],n_out=10,batch_size=20, momentum = 0.5):
 
-        self.batch_size = batch_size
-        self.train_set_x, self.train_set_y = datasets[0]
-        self.valid_set_x, self.valid_set_y = datasets[1]
-        self.test_set_x, self.test_set_y = datasets[2]
+        train_set_x, train_set_y = datasets[0]
+        valid_set_x, valid_set_y = datasets[1]
+        test_set_x, test_set_y = datasets[2]
+        
+        self.n_train_batches = train_set_x.get_value(borrow=True).shape[0] // batch_size
+        self.n_valid_batches = valid_set_x.get_value(borrow=True).shape[0] // batch_size
+        self.n_test_batches = test_set_x.get_value(borrow=True).shape[0] // batch_size
+
         # allocate symbolic variables for the data
-        self.index = T.lscalar()  # index to a [mini]batch
-        self.x = T.matrix('x')  # the data is presented as rasterized images
-        self.y = T.ivector('y')  # the labels are presented as 1D vector of
+        index = T.lscalar()  # index to a [mini]batch
+        x = T.matrix('x')  # the data is presented as rasterized images
+        y = T.ivector('y')  # the labels are presented as 1D vector of
         # [int] labels
 
-        self.rng = numpy.random.RandomState(1234)
+        rng = np.random.RandomState(1234)
 
         # construct the MLP class
-        self.classifier = MLP(
-            rng=self.rng,
-            input=self.x,
+        classifier = MLP(
+            rng=rng,
+            input=x,
             n_in=n_in,
             n_hidden=n_hidden,
             n_out=n_out
@@ -187,80 +189,77 @@ class mlp_model(object):
         # the cost we minimize during training is the negative log likelihood of
         # the model plus the regularization terms (L1 and L2); cost is expressed
         # here symbolically
-        self.cost = (
-            self.classifier.negative_log_likelihood(self.y)
-            + L1_reg * self.classifier.L1
-            + L2_reg * self.classifier.L2_sqr
+        cost = (
+            classifier.negative_log_likelihood(y)
+            + L1_reg * classifier.L1
+            + L2_reg * classifier.L2_sqr
         )
         # end-snippet-4
 
         # compiling a Theano function that computes the mistakes that are made
         # by the model on a minibatch
         self.test_model = theano.function(
-            inputs=[self.index],
-            outputs=self.classifier.errors(self.y),
+            inputs=[index],
+            outputs=classifier.errors(y),
             givens={
-                self.x: self.test_set_x[self.index * self.batch_size:(self.index + 1) * self.batch_size],
-                self.y: self.test_set_y[self.index * self.batch_size:(self.index + 1) * self.batch_size]
+                x: test_set_x[index * batch_size:(index + 1) * batch_size],
+                y: test_set_y[index * batch_size:(index + 1) * batch_size]
+            }
+        )
+        self.train_error = theano.function(
+            inputs=[index],
+            outputs=classifier.errors(y),
+            givens={
+                x: train_set_x[index * batch_size:(index + 1) * batch_size],
+                y: train_set_y[index * batch_size:(index + 1) * batch_size]
             }
         )
         self.validate_model = theano.function(
-            inputs=[self.index],
-            outputs=self.classifier.errors(self.y),
+            inputs=[index],
+            outputs=classifier.errors(y),
             givens={
-                self.x: self.valid_set_x[self.index * self.batch_size:(self.index + 1) * self.batch_size],
-                self.y: self.valid_set_y[self.index * self.batch_size:(self.index + 1) * self.batch_size]
+                x: valid_set_x[index * batch_size:(index + 1) * batch_size],
+                y: valid_set_y[index * batch_size:(index + 1) * batch_size]
             }
         )
 
-        # start-snippet-5
-        # compute the gradient of cost with respect to theta (sorted in params)
+        #compute the gradient of cost with respect to theta (sorted in params)
         # the resulting gradients will be stored in a list gparams
-        self.gparams = [T.grad(self.cost, param) for param in self.classifier.params]
+        gparams = [T.grad(cost, param) for param in classifier.params]
         # specify how to update the parameters of the model as a list of
         # (variable, update expression) pairs
-
-        self.updates = [
+        v = np.zeros(len(gparams))
+        updates = [
             (param, param - learning_rate * gparam)
-            for param, gparam in zip(self.classifier.params, self.gparams)
+            for param, gparam, vel in zip(classifier.params, gparams,v)
             ]
         # compiling a Theano function `train_model` that returns the cost, but
         # in the same time updates the parameter of the model based on the rules
         # defined in `updates`
         self.train_model = theano.function(
-            inputs=[self.index],
-            outputs=self.cost,
-            updates=self.updates,
+            inputs=[index],
+            outputs=cost,
+            updates=updates,
             givens={
-                self.x: self.train_set_x[self.index * self.batch_size: (self.index + 1) * self.batch_size],
-                self.y: self.train_set_y[self.index * self.batch_size: (self.index + 1) * self.batch_size]
+                x: train_set_x[index * batch_size: (index + 1) * batch_size],
+                y: train_set_y[index * batch_size: (index + 1) * batch_size]
             }
         )
-    def train_mlp(self, n_epochs=1000):
-        ###############
-        # TRAIN MODEL #
-        ###############
+    def train_mlp(self, n_epochs=10):
         print('... training')
-
-
-        # compute number of minibatches for training, validation and testing
-        n_train_batches = self.train_set_x.get_value(borrow=True).shape[0] // self.batch_size
-        n_valid_batches = self.valid_set_x.get_value(borrow=True).shape[0] // self.batch_size
-        n_test_batches = self.test_set_x.get_value(borrow=True).shape[0] // self.batch_size
-
+        train_error = np.zeros(n_epochs)
+        validation_error = np.zeros(n_epochs)
+        test_error = np.zeros(n_epochs)
+        cost_func = np.zeros(n_epochs)
         # early-stopping parameters
         patience = 10000  # look as this many examples regardless
         patience_increase = 2  # wait this much longer when a new best is
         # found
         improvement_threshold = 0.995  # a relative improvement of this much is
         # considered significant
-        validation_frequency = min(n_train_batches, patience // 2)
-        # go through this many
-        # minibatche before checking the network
-        # on the validation set; in this case we
-        # check every epoch
+        validation_frequency = min(self.n_train_batches, patience // 2)
 
-        best_validation_loss = numpy.inf
+        best_validation_loss = np.inf
         best_iter = 0
         test_score = 0.
         start_time = timeit.default_timer()
@@ -270,28 +269,28 @@ class mlp_model(object):
 
         while (epoch < n_epochs) and (not done_looping):
             epoch = epoch + 1
-            for minibatch_index in range(n_train_batches):
+            for minibatch_index in range(self.n_train_batches):
 
                 minibatch_avg_cost = self.train_model(minibatch_index)
-                # iteration number
-                iter = (epoch - 1) * n_train_batches + minibatch_index
 
+                # iteration number
+                iter = (epoch - 1) * self.n_train_batches + minibatch_index
                 if (iter + 1) % validation_frequency == 0:
                     # compute zero-one loss on validation set
                     validation_losses = [self.validate_model(i) for i
-                                         in range(n_valid_batches)]
-                    this_validation_loss = numpy.mean(validation_losses)
-
+                                         in range(self.n_valid_batches)]
+                    this_validation_loss = np.mean(validation_losses)
+                    validation_error[epoch-1] = this_validation_loss
                     print(
                         'epoch %i, minibatch %i/%i, validation error %f %%' %
                         (
                             epoch,
                             minibatch_index + 1,
-                            n_train_batches,
+                            self.n_train_batches,
                             this_validation_loss * 100.
                         )
                     )
-
+                    """
                     # if we got the best validation score until now
                     if this_validation_loss < best_validation_loss:
                         # improve patience if loss improvement is good enough
@@ -306,18 +305,35 @@ class mlp_model(object):
 
                         # test it on the test set
                         test_losses = [self.test_model(i) for i
-                                       in range(n_test_batches)]
-                        test_score = numpy.mean(test_losses)
+                                       in range(self.n_test_batches)]
+                        test_score = np.mean(test_losses)
 
                         print(('     epoch %i, minibatch %i/%i, test error of '
                                'best model %f %%') %
-                              (epoch, minibatch_index + 1, n_train_batches,
+                              (epoch, minibatch_index + 1, self.n_train_batches,
                                test_score * 100.))
-
-                if patience <= iter:
-                    done_looping = True
-                    break
-
+                    """
+                    # test it on the test set
+                    cost_func[epoch-1] = minibatch_avg_cost
+                    test_losses = [self.test_model(i) for i
+                                   in range(self.n_test_batches)]
+                    test_score = np.mean(test_losses)
+                    test_error[epoch-1] = test_score
+                    train_losses = [self.train_model(i) for i
+                                   in range(self.n_train_batches)]
+                    train_score = np.mean(train_losses)
+                    train_error[epoch - 1] = train_score
+                    print(('     epoch %i, minibatch %i/%i, test error of '
+                           'best model %f %%') %
+                          (epoch, minibatch_index + 1, self.n_train_batches,
+                           test_score * 100.))
+                #if patience <= iter:
+                #    done_looping = True
+                #    break
+        plt.plot(cost_func,color='yellow',label = 'cost func')
+        plt.plot(train_error,color='red',label = 'Training Error')
+        plt.plot(validation_error,label='Validation error')
+        plt.show()
         end_time = timeit.default_timer()
         print(('Optimization complete. Best validation score of %f %% '
                'obtained at iteration %i, with test performance %f %%') %
